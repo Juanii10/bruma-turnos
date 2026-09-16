@@ -123,24 +123,37 @@ publicRouter.post('/bookings', async (req, res) => {
   const depositAmount = Math.round((service.price * settings.depositPercentage) / 100);
   const cancelToken = generateToken();
 
-  const result = db
-    .insert(bookings)
-    .values({
-      professionalId: assignedProfessionalId,
-      serviceId: service.id,
-      customerName,
-      customerPhone,
-      customerEmail,
-      startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
-      status: 'pending_deposit',
-      depositAmount,
-      depositStatus: 'pending',
-      cancelToken,
-      notes: notes || null,
-      createdAt: new Date().toISOString(),
-    })
-    .run();
+  let result;
+  try {
+    result = db
+      .insert(bookings)
+      .values({
+        professionalId: assignedProfessionalId,
+        serviceId: service.id,
+        customerName,
+        customerPhone,
+        customerEmail,
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+        status: 'pending_deposit',
+        depositAmount,
+        depositStatus: 'pending',
+        cancelToken,
+        notes: notes || null,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+  } catch (err) {
+    // La restricción única de la base de datos (idx_bookings_no_double_booking)
+    // es quien tiene la última palabra: si dos personas pidieron el mismo
+    // turno casi al mismo tiempo, acá es donde se resuelve de verdad —
+    // el chequeo de disponibilidad de más arriba es solo una validación
+    // rápida, no la fuente de verdad.
+    if (String(err.code).startsWith('SQLITE_CONSTRAINT') || /UNIQUE constraint failed/.test(err.message || '')) {
+      return res.status(409).json({ error: 'Justo se reservó ese horario. Elegí otro, por favor.' });
+    }
+    throw err;
+  }
 
   const bookingId = Number(result.lastInsertRowid);
 

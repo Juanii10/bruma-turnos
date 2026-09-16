@@ -80,6 +80,10 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_bookings_professional_start ON bookings(professional_id, start_at);
     CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_no_double_booking
+      ON bookings(professional_id, start_at)
+      WHERE status IN ('pending_deposit', 'confirmed');
   `);
 }
 
