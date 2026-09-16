@@ -30,7 +30,7 @@ etc. — cualquier negocio que trabaje con turnos).
 Para este proyecto se usó **Drizzle ORM + SQLite (better-sqlite3)**:
 Drizzle es 100% JS/SQL, no depende de binarios externos.
 
-## Pago de seña (importante)
+## Pago de seña
 
 El pago de la seña está **simulado**: no se integra ningún gateway de pago
 real, solo se valida que el número de tarjeta tenga 16 dígitos.
