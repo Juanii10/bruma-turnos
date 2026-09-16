@@ -1,0 +1,13 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import AdminNav from '../../components/admin/AdminNav.jsx';
+import AdminTurnos from '../../components/admin/AdminTurnos.jsx';
+---
+
+<AdminLayout title="Turnos — Admin BRUMA">
+  <AdminNav current="/admin/turnos" client:load />
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <h1 class="font-display text-3xl text-ink mb-8">Turnos</h1>
+    <AdminTurnos client:load />
+  </div>
+</AdminLayout>

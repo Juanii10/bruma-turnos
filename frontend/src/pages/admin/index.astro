@@ -1,0 +1,10 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import AdminLogin from '../../components/admin/AdminLogin.jsx';
+---
+
+<AdminLayout title="Ingresar — Admin BRUMA">
+  <div class="min-h-screen flex items-center justify-center px-6 py-16">
+    <AdminLogin client:load />
+  </div>
+</AdminLayout>

@@ -1,0 +1,10 @@
+node_modules/
+.env
+dist/
+data/bruma.db
+data/bruma.db-shm
+data/bruma.db-wal
+.DS_Store
+*.log
+
+frontend/.astro/
