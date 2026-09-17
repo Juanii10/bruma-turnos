@@ -10,9 +10,11 @@ import {
 } from '../db/schema.js';
 import { getAvailableSlots, buildDateTime } from '../services/availability.js';
 import { generateToken } from '../utils/token.js';
-import { sendEmail, bookingConfirmationEmail } from '../services/email.js';
+import { sendEmail, bookingConfirmationEmail, bookingRescheduledEmail } from '../services/email.js';
 
 export const publicRouter = Router();
+
+const MIN_HOURS_BEFORE_MODIFY = 24;
 
 function getSettings() {
   return db.select().from(businessSettings).get();
@@ -226,6 +228,111 @@ publicRouter.post('/bookings/:id/pay', async (req, res) => {
   await sendEmail({ to: booking.customerEmail, subject, html });
 
   res.json({ ok: true, status: 'confirmed' });
+});
+
+publicRouter.post('/bookings/:id/reschedule', async (req, res) => {
+  const { token, date, time, professionalId } = req.body || {};
+  const bookingId = Number(req.params.id);
+  const booking = db.select().from(bookings).where(eq(bookings.id, bookingId)).get();
+
+  if (!booking || booking.cancelToken !== token) {
+    return res.status(404).json({ error: 'Turno no encontrado' });
+  }
+  if (!['pending_deposit', 'confirmed'].includes(booking.status)) {
+    return res.status(409).json({ error: `El turno ya está en estado "${booking.status}" y no se puede modificar.` });
+  }
+  if (!date || !time) {
+    return res.status(400).json({ error: 'Faltan la fecha y el horario nuevos' });
+  }
+
+  const hoursUntilCurrentStart = (new Date(booking.startAt).getTime() - Date.now()) / 3_600_000;
+  if (hoursUntilCurrentStart < MIN_HOURS_BEFORE_MODIFY) {
+    return res.status(409).json({
+      error: `Solo se puede modificar el turno hasta ${MIN_HOURS_BEFORE_MODIFY}hs antes de la fecha reservada. Contactanos directamente para este caso.`,
+    });
+  }
+
+  const service = db.select().from(services).where(eq(services.id, booking.serviceId)).get();
+  if (!service || !service.active) {
+    return res.status(404).json({ error: 'Servicio no encontrado' });
+  }
+
+  let assignedProfessionalId = null;
+
+  if (professionalId && professionalId !== 'any' && Number(professionalId) !== booking.professionalId) {
+    const candidateId = Number(professionalId);
+    const slots = getAvailableSlots({ professionalId: candidateId, serviceId: service.id, dateStr: date, excludeBookingId: bookingId });
+    if (!slots.includes(time)) {
+      return res.status(409).json({ error: 'Ese horario ya no está disponible. Elegí otro.' });
+    }
+    assignedProfessionalId = candidateId;
+  } else if (professionalId === 'any') {
+    const links = db.select().from(professionalServices).where(eq(professionalServices.serviceId, service.id)).all();
+    const activeProfessionals = db.select().from(professionals).where(eq(professionals.active, true)).all();
+    const eligibleIds = new Set(links.map((l) => l.professionalId));
+    const eligibleProfessionals = activeProfessionals.filter((p) => eligibleIds.has(p.id));
+
+    for (const p of eligibleProfessionals) {
+      const slots = getAvailableSlots({ professionalId: p.id, serviceId: service.id, dateStr: date, excludeBookingId: bookingId });
+      if (slots.includes(time)) {
+        assignedProfessionalId = p.id;
+        break;
+      }
+    }
+    if (!assignedProfessionalId) {
+      return res.status(409).json({ error: 'Ese horario ya no está disponible con ningún profesional. Elegí otro.' });
+    }
+  } else {
+    // Se mantiene el mismo profesional, solo cambia fecha/hora
+    const slots = getAvailableSlots({ professionalId: booking.professionalId, serviceId: service.id, dateStr: date, excludeBookingId: bookingId });
+    if (!slots.includes(time)) {
+      return res.status(409).json({ error: 'Ese horario ya no está disponible. Elegí otro.' });
+    }
+    assignedProfessionalId = booking.professionalId;
+  }
+
+  const newStartAt = buildDateTime(date, time);
+  const newEndAt = new Date(newStartAt.getTime() + service.durationMinutes * 60000);
+
+  try {
+    db
+      .update(bookings)
+      .set({
+        professionalId: assignedProfessionalId,
+        startAt: newStartAt.toISOString(),
+        endAt: newEndAt.toISOString(),
+        reminderSentAt: null, // si ya se había mandado el recordatorio del horario viejo, recalculamos para el nuevo
+      })
+      .where(eq(bookings.id, bookingId))
+      .run();
+  } catch (err) {
+    if (String(err.code).startsWith('SQLITE_CONSTRAINT') || /UNIQUE constraint failed/.test(err.message || '')) {
+      return res.status(409).json({ error: 'Justo se reservó ese horario. Elegí otro, por favor.' });
+    }
+    throw err;
+  }
+
+  const professional = db.select().from(professionals).where(eq(professionals.id, assignedProfessionalId)).get();
+  const settings = getSettings();
+
+  const { subject, html } = bookingRescheduledEmail({
+    businessName: settings.name,
+    customerName: booking.customerName,
+    serviceName: service.name,
+    professionalName: professional.name,
+    previousStartAt: booking.startAt,
+    startAt: newStartAt.toISOString(),
+    cancelUrl: `${process.env.FRONTEND_URL || 'http://localhost:4321'}/turno?id=${bookingId}&token=${booking.cancelToken}`,
+  });
+  await sendEmail({ to: booking.customerEmail, subject, html });
+
+  res.json({
+    ok: true,
+    startAt: newStartAt.toISOString(),
+    endAt: newEndAt.toISOString(),
+    professionalId: assignedProfessionalId,
+    professionalName: professional.name,
+  });
 });
 
 publicRouter.post('/bookings/:id/cancel', (req, res) => {

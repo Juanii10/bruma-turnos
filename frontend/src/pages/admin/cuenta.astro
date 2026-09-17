@@ -1,0 +1,13 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import AdminNav from '../../components/admin/AdminNav.jsx';
+import AdminCuenta from '../../components/admin/AdminCuenta.jsx';
+---
+
+<AdminLayout title="Mi cuenta — Admin BRUMA">
+  <AdminNav current="/admin/cuenta" client:load />
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <h1 class="font-display text-3xl text-ink mb-8">Mi cuenta</h1>
+    <AdminCuenta client:load />
+  </div>
+</AdminLayout>

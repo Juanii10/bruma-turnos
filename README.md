@@ -11,7 +11,10 @@ etc. — cualquier negocio que trabaje con turnos).
 - Home, Servicios, Equipo
 - Flujo de reserva en 5 pasos: servicio → profesional (o "cualquiera
   disponible") → fecha/hora → datos de contacto → pago de seña (simulado)
-- Página de estado del turno (ver detalle / cancelar) vía link enviado por mail
+- Página de estado del turno (ver detalle, **modificar fecha/hora** o
+  cancelar) vía link enviado por mail — modificar el horario solo está
+  disponible hasta 24hs antes del turno; cancelar se puede en cualquier
+  momento mientras el turno siga activo
 
 **Backend** (Node.js + Express)
 - Cálculo de disponibilidad real por profesional, servicio y horario de trabajo
@@ -24,14 +27,121 @@ etc. — cualquier negocio que trabaje con turnos).
 - Panel de administración con autenticación (JWT): turnos, servicios,
   profesionales (con horarios y servicios que ofrece cada uno) y estadísticas
   básicas (ocupación, servicios más pedidos)
+- **Protegido contra double-booking por concurrencia**: si dos personas
+  reservan el mismo turno al mismo tiempo, solo una lo consigue (ver abajo)
 
-## Sobre el stack
+## Sobre el stack (una diferencia con NULA)
 
-Para este proyecto se usó **Drizzle ORM + SQLite (better-sqlite3)**:
-Drizzle es 100% JS/SQL, no depende de binarios externos.
+NULA usa Prisma como ORM. Para este proyecto se usó **Drizzle ORM +
+SQLite (better-sqlite3)** en su lugar: Prisma necesita descargar un binario
+del "query engine" desde un servidor propio de Prisma, y esa descarga
+estuvo bloqueada en el entorno donde arme y probé este proyecto — no depende
+de tu conexión, es una política de red del sandbox. Drizzle es 100% JS/SQL,
+no depende de binarios externos, y el resultado es equivalente: schema
+como código, queries tipadas, y una migración simple.
 
-## Pago de seña
+Para producción con Postgres (Neon, como en NULA) el cambio es chico:
+1. `npm install pg` (o usar el driver serverless de Neon)
+2. En `src/db/client.js`, cambiar el import de `drizzle-orm/better-sqlite3`
+   por `drizzle-orm/node-postgres` (o `drizzle-orm/neon-http`) y conectar
+   con `DATABASE_URL` en vez de un archivo.
+3. En `src/db/schema.js`, cambiar el import de `drizzle-orm/sqlite-core`
+   por `drizzle-orm/pg-core` (los nombres de columnas son casi idénticos).
+4. Adaptar el `CREATE TABLE` de `src/db/migrate.js` a sintaxis de Postgres
+   (tipos `SERIAL`/`BOOLEAN` en vez de `INTEGER AUTOINCREMENT`/`INTEGER`).
+   El índice único parcial de `idx_bookings_no_double_booking` (ver más
+   abajo) se escribe igual en Postgres, no necesita cambios.
+
+## Concurrencia: que dos personas no reserven el mismo turno
+
+Si dos clientes piden el mismo turno (mismo profesional + mismo horario) al
+mismo tiempo, solo uno de los dos se queda con la reserva. Esto está
+resuelto en dos capas:
+
+1. **Validación en el código** (`src/routes/public.js`): antes de crear la
+   reserva, se recalcula la disponibilidad real. Da un error rápido y claro
+   ("Ese horario ya no está disponible") en el caso normal.
+2. **Restricción a nivel de base de datos** (`src/db/migrate.js`): un índice
+   único parcial —
+   `CREATE UNIQUE INDEX ... ON bookings(professional_id, start_at) WHERE status IN ('pending_deposit', 'confirmed')`
+   — hace *imposible* que existan dos turnos activos para el mismo
+   profesional en el mismo horario exacto, sin importar qué pasó en el
+   código de arriba. Es la que tiene la última palabra.
+
+La razón de tener las dos capas: con SQLite y un solo proceso de Node (como
+corre este proyecto), la capa 1 sola ya alcanza en la práctica, porque
+`better-sqlite3` es síncrono y Node es de un solo hilo — dos pedidos nunca
+se entrelazan a mitad de la operación. Pero eso deja de ser cierto apenas:
+(a) el servidor corre en más de un proceso (por ejemplo, varias instancias
+en Render), o (b) migrás a Postgres con un driver asíncrono (`await` entre
+el chequeo y la inserción sí deja lugar para que se cuele otro pedido en el
+medio). El índice único de la base cubre esos casos también, porque lo
+hace la base de datos, no el proceso de Node.
+
+## Correr el proyecto localmente
+
+### Backend
+
+```bash
+cd backend
+cp .env.example .env
+npm install
+npm run migrate   # crea las tablas (SQLite en ./data/bruma.db)
+npm run seed       # carga datos de ejemplo (servicios, profesionales, admin)
+npm run dev        # http://localhost:3001
+```
+
+Admin de prueba: **admin@bruma.test** / **bruma2026**
+
+### Frontend
+
+```bash
+cd frontend
+cp .env.example .env   # PUBLIC_API_URL apuntando al backend
+npm install
+npm run dev             # http://localhost:4321
+```
+
+## Mails reales (opcional)
+
+Completá `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` en
+`backend/.env` con una cuenta SMTP real (Gmail con contraseña de aplicación,
+SendGrid, Resend, etc.). Sin esas variables, el sistema simula el envío
+imprimiendo el mail por consola — así podés probar el flujo completo sin
+depender de credenciales de mail.
+
+## Deploy sugerido (mismo patrón que NULA)
+
+- **Backend** → Render (o Railway/Fly.io). Variables de entorno: las de
+  `.env.example` + `DATABASE_URL` si migrás a Postgres.
+- **Base de datos** → Neon (Postgres) si migrás desde SQLite, siguiendo los
+  pasos de arriba.
+- **Frontend** → Vercel. Es un sitio 100% estático (`npm run build` genera
+  `dist/`), con `PUBLIC_API_URL` apuntando a la URL del backend en Render.
+
+## Pago de seña (importante)
 
 El pago de la seña está **simulado**: no se integra ningún gateway de pago
-real, solo se valida que el número de tarjeta tenga 16 dígitos.
+real, solo se valida que el número de tarjeta tenga 16 dígitos. Para un
+cliente real en Argentina, el paso natural sería integrar **Mercado Pago
+Checkout Pro/API** en `backend/src/routes/public.js` (el endpoint
+`POST /bookings/:id/pay` es el único lugar que habría que tocar).
 
+## Estructura
+
+```
+bruma-turnos/
+├── backend/
+│   ├── src/
+│   │   ├── db/          # schema, migración, seed
+│   │   ├── routes/       # public.js (reservas), admin.js (panel)
+│   │   ├── services/     # disponibilidad, mail, cron jobs
+│   │   ├── middleware/    # auth admin (JWT)
+│   │   └── app.js, server.js
+│   └── data/bruma.db     # base SQLite (se regenera con migrate+seed)
+└── frontend/
+    └── src/
+        ├── pages/         # rutas públicas + /admin/*
+        ├── components/    # islands de React (booking wizard, admin, etc.)
+        └── layouts/
+```

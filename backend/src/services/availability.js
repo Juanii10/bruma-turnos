@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { workingHours, bookings, services } from '../db/schema.js';
+import { workingHours, scheduleOverrides, bookings, services } from '../db/schema.js';
 
 const SLOT_STEP_MINUTES = 30; // granularidad de los horarios ofrecidos
 const MIN_LEAD_MINUTES = 60; // no se puede reservar con menos de 1hs de anticipación
@@ -24,21 +24,44 @@ function parseDateLocal(dateStr) {
 }
 
 /**
+ * Devuelve los rangos horarios (en minutos) en los que trabaja un profesional
+ * en una fecha exacta. Si hay una excepción puntual cargada para esa fecha
+ * (schedule_overrides), esa manda por completo — ya sea "cerrado" (sin
+ * rangos) u "horario especial" (un rango distinto al de la plantilla). Si no
+ * hay excepción, se usa la plantilla semanal (working_hours) para ese día de
+ * la semana, tal como antes.
+ */
+export function getHourRangesForDate(professionalId, dateStr, dayOfWeek) {
+  const override = db
+    .select()
+    .from(scheduleOverrides)
+    .where(and(eq(scheduleOverrides.professionalId, professionalId), eq(scheduleOverrides.date, dateStr)))
+    .get();
+
+  if (override) {
+    if (override.isClosed) return [];
+    return [{ startMinutes: override.startMinutes, endMinutes: override.endMinutes }];
+  }
+
+  return db
+    .select()
+    .from(workingHours)
+    .where(and(eq(workingHours.professionalId, professionalId), eq(workingHours.dayOfWeek, dayOfWeek)))
+    .all();
+}
+
+/**
  * Calcula los horarios disponibles para un profesional + servicio en una fecha dada.
  * Devuelve un array de strings 'HH:MM' (hora de inicio del turno).
  */
-export function getAvailableSlots({ professionalId, serviceId, dateStr }) {
+export function getAvailableSlots({ professionalId, serviceId, dateStr, excludeBookingId = null }) {
   const service = db.select().from(services).where(eq(services.id, serviceId)).get();
   if (!service || !service.active) return [];
 
   const date = parseDateLocal(dateStr);
   const dayOfWeek = date.getDay();
 
-  const hoursToday = db
-    .select()
-    .from(workingHours)
-    .where(and(eq(workingHours.professionalId, professionalId), eq(workingHours.dayOfWeek, dayOfWeek)))
-    .all();
+  const hoursToday = getHourRangesForDate(professionalId, dateStr, dayOfWeek);
 
   if (hoursToday.length === 0) return [];
 
@@ -52,7 +75,9 @@ export function getAvailableSlots({ professionalId, serviceId, dateStr }) {
       ),
     )
     .all()
-    .filter((b) => b.startAt.slice(0, 10) === dateStr);
+    .filter((b) => b.startAt.slice(0, 10) === dateStr)
+    // Al reprogramar un turno, no debe chocar consigo mismo (su propio horario viejo)
+    .filter((b) => b.id !== excludeBookingId);
 
   const now = new Date();
   const isToday = dateStr === `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;

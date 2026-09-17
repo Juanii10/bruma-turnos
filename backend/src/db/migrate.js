@@ -59,6 +59,20 @@ export function runMigrations() {
       end_minutes INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS schedule_overrides (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      professional_id INTEGER NOT NULL REFERENCES professionals(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      is_closed INTEGER NOT NULL DEFAULT 0,
+      start_minutes INTEGER,
+      end_minutes INTEGER
+    );
+
+    -- Como mucho una excepción por profesional y fecha (si se vuelve a
+    -- guardar la misma fecha, se reemplaza en vez de duplicarse).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_overrides_professional_date
+      ON schedule_overrides(professional_id, date);
+
     CREATE TABLE IF NOT EXISTS bookings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       professional_id INTEGER NOT NULL REFERENCES professionals(id),
@@ -81,6 +95,15 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_bookings_professional_start ON bookings(professional_id, start_at);
     CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
 
+    -- Evita el double-booking a nivel de base de datos: dos turnos "activos"
+    -- (pendientes de seña o confirmados) no pueden coexistir para el mismo
+    -- profesional en el mismo horario exacto. Es un índice único PARCIAL:
+    -- solo aplica a status pending_deposit/confirmed, así que un turno
+    -- cancelado/expirado no bloquea que ese horario se reserve de nuevo.
+    -- Esta es la protección real contra condiciones de carrera (dos personas
+    -- reservando el mismo turno al mismo tiempo) — la validación de
+    -- disponibilidad en el código es solo para dar feedback rápido antes de
+    -- llegar hasta acá; quien de verdad decide es esta restricción.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_no_double_booking
       ON bookings(professional_id, start_at)
       WHERE status IN ('pending_deposit', 'confirmed');

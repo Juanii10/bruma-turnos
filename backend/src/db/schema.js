@@ -55,12 +55,30 @@ export const professionalServices = sqliteTable('professional_services', {
 
 // --- Horarios de trabajo por profesional ---
 // dayOfWeek: 0 = domingo ... 6 = sábado. start/end en minutos desde medianoche.
+// Esto es la "plantilla" semanal por defecto. Puede quedar vacía si el
+// profesional no tiene ningún patrón fijo y maneja todo con excepciones
+// puntuales (ver scheduleOverrides abajo).
 export const workingHours = sqliteTable('working_hours', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   professionalId: integer('professional_id').notNull().references(() => professionals.id, { onDelete: 'cascade' }),
   dayOfWeek: integer('day_of_week').notNull(),
   startMinutes: integer('start_minutes').notNull(),
   endMinutes: integer('end_minutes').notNull(),
+});
+
+// --- Excepciones puntuales de horario, por fecha exacta ---
+// Pisan a la plantilla semanal (working_hours) para esa fecha específica.
+// isClosed=true: ese día no trabaja, sin importar lo que diga la plantilla.
+// isClosed=false: trabaja de startMinutes a endMinutes ese día en particular
+// (en vez de lo que diga la plantilla, o incluso si la plantilla no tiene
+// nada cargado para ese día de la semana).
+export const scheduleOverrides = sqliteTable('schedule_overrides', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  professionalId: integer('professional_id').notNull().references(() => professionals.id, { onDelete: 'cascade' }),
+  date: text('date').notNull(), // 'YYYY-MM-DD'
+  isClosed: integer('is_closed', { mode: 'boolean' }).notNull().default(false),
+  startMinutes: integer('start_minutes'),
+  endMinutes: integer('end_minutes'),
 });
 
 // --- Turnos ---

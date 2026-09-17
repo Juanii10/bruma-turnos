@@ -74,6 +74,26 @@ export function bookingConfirmationEmail({ businessName, customerName, serviceNa
   return { subject, html };
 }
 
+export function bookingRescheduledEmail({ businessName, customerName, serviceName, professionalName, previousStartAt, startAt, cancelUrl }) {
+  const when = formatDateTime(startAt);
+  const before = formatDateTime(previousStartAt);
+  const subject = `Turno reprogramado en ${businessName} — nuevo horario: ${when}`;
+  const html = `
+    <div style="font-family: sans-serif; max-width: 480px;">
+      <h2>Tu turno fue reprogramado 🔄</h2>
+      <p>Hola ${customerName}, movimos tu turno en <strong>${businessName}</strong> a un nuevo horario:</p>
+      <ul>
+        <li><strong>Servicio:</strong> ${serviceName}</li>
+        <li><strong>Profesional:</strong> ${professionalName}</li>
+        <li><strong>Horario anterior:</strong> ${before}</li>
+        <li><strong>Nuevo horario:</strong> ${when}</li>
+      </ul>
+      <p>Si necesitás volver a modificarlo o cancelarlo, <a href="${cancelUrl}">hacé click acá</a>.</p>
+    </div>
+  `;
+  return { subject, html };
+}
+
 export function bookingReminderEmail({ businessName, customerName, serviceName, professionalName, startAt }) {
   const when = formatDateTime(startAt);
   const subject = `Recordatorio: tu turno en ${businessName} es pronto`;

@@ -8,9 +8,11 @@ import {
   services,
   professionalServices,
   workingHours,
+  scheduleOverrides,
   bookings,
 } from '../db/schema.js';
 import { signAdminToken, requireAdminAuth } from '../middleware/auth.js';
+import { getHourRangesForDate } from '../services/availability.js';
 
 export const adminRouter = Router();
 
@@ -41,6 +43,27 @@ adminRouter.get('/me', requireAdminAuth, (req, res) => {
 
 // Todo lo de abajo requiere estar autenticado como admin
 adminRouter.use(requireAdminAuth);
+
+adminRouter.patch('/me/password', async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Ingresá tu contraseña actual y la nueva contraseña' });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: 'La nueva contraseña tiene que tener al menos 8 caracteres' });
+  }
+
+  const admin = db.select().from(admins).where(eq(admins.id, req.admin.sub)).get();
+  if (!admin) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  const ok = await bcrypt.compare(currentPassword, admin.passwordHash);
+  if (!ok) return res.status(401).json({ error: 'La contraseña actual no es correcta' });
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  db.update(admins).set({ passwordHash }).where(eq(admins.id, admin.id)).run();
+
+  res.json({ ok: true });
+});
 
 // ---------- Turnos ----------
 
@@ -201,6 +224,86 @@ adminRouter.patch('/professionals/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Excepciones puntuales de horario ----------
+// Para profesionales que no manejan un horario semanal fijo: además (o en
+// vez) de la plantilla semanal en "workingHours", acá se puede marcar una
+// fecha exacta como cerrada o con un horario especial que pisa la plantilla.
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+adminRouter.get('/professionals/:id/schedule-overrides', (req, res) => {
+  const professionalId = Number(req.params.id);
+  const professional = db.select().from(professionals).where(eq(professionals.id, professionalId)).get();
+  if (!professional) return res.status(404).json({ error: 'Profesional no encontrado' });
+
+  const today = todayStr();
+  const from = req.query.from && DATE_RE.test(req.query.from) ? req.query.from : today;
+
+  const rows = db
+    .select()
+    .from(scheduleOverrides)
+    .where(eq(scheduleOverrides.professionalId, professionalId))
+    .all()
+    .filter((o) => o.date >= from)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  res.json(rows);
+});
+
+adminRouter.put('/professionals/:id/schedule-overrides/:date', (req, res) => {
+  const professionalId = Number(req.params.id);
+  const { date } = req.params;
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'Fecha inválida, debe ser YYYY-MM-DD' });
+
+  const professional = db.select().from(professionals).where(eq(professionals.id, professionalId)).get();
+  if (!professional) return res.status(404).json({ error: 'Profesional no encontrado' });
+
+  const { isClosed, startMinutes, endMinutes } = req.body || {};
+
+  let values;
+  if (isClosed) {
+    values = { professionalId, date, isClosed: true, startMinutes: null, endMinutes: null };
+  } else {
+    if (
+      !Number.isInteger(startMinutes) ||
+      !Number.isInteger(endMinutes) ||
+      startMinutes < 0 ||
+      endMinutes > 24 * 60 ||
+      startMinutes >= endMinutes
+    ) {
+      return res.status(400).json({ error: 'Para un horario especial, indicá startMinutes y endMinutes válidos (startMinutes < endMinutes)' });
+    }
+    values = { professionalId, date, isClosed: false, startMinutes, endMinutes };
+  }
+
+  const existing = db
+    .select()
+    .from(scheduleOverrides)
+    .where(and(eq(scheduleOverrides.professionalId, professionalId), eq(scheduleOverrides.date, date)))
+    .get();
+
+  if (existing) {
+    db.update(scheduleOverrides).set(values).where(eq(scheduleOverrides.id, existing.id)).run();
+  } else {
+    db.insert(scheduleOverrides).values(values).run();
+  }
+
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/professionals/:id/schedule-overrides/:date', (req, res) => {
+  const professionalId = Number(req.params.id);
+  const { date } = req.params;
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'Fecha inválida, debe ser YYYY-MM-DD' });
+
+  db
+    .delete(scheduleOverrides)
+    .where(and(eq(scheduleOverrides.professionalId, professionalId), eq(scheduleOverrides.date, date)))
+    .run();
+
+  res.json({ ok: true });
+});
+
 // ---------- Estadísticas ----------
 
 adminRouter.get('/stats', (req, res) => {
@@ -216,11 +319,7 @@ adminRouter.get('/stats', (req, res) => {
   })();
 
   const occupancyByProfessional = activeProfessionals.map((p) => {
-    const hoursToday = db
-      .select()
-      .from(workingHours)
-      .where(and(eq(workingHours.professionalId, p.id), eq(workingHours.dayOfWeek, dayOfWeek)))
-      .all();
+    const hoursToday = getHourRangesForDate(p.id, date, dayOfWeek);
     const availableMinutes = hoursToday.reduce((sum, h) => sum + (h.endMinutes - h.startMinutes), 0);
 
     const professionalBookings = todayBookings.filter((b) => b.professionalId === p.id);

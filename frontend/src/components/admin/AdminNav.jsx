@@ -5,6 +5,7 @@ const LINKS = [
   { href: '/admin/turnos', label: 'Turnos' },
   { href: '/admin/servicios', label: 'Servicios' },
   { href: '/admin/profesionales', label: 'Profesionales' },
+  { href: '/admin/cuenta', label: 'Mi cuenta' },
 ];
 
 export default function AdminNav({ current }) {

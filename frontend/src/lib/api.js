@@ -43,6 +43,9 @@ export const payDeposit = (id, token, cardNumber) =>
 export const cancelBooking = (id, token) =>
   request(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ token }) });
 
+export const rescheduleBooking = (id, token, date, time) =>
+  request(`/bookings/${id}/reschedule`, { method: 'POST', body: JSON.stringify({ token, date, time }) });
+
 // ---------- Admin ----------
 
 const TOKEN_KEY = 'bruma_admin_token';
@@ -62,6 +65,9 @@ export function clearAdminToken() {
 
 export const adminLogin = (email, password) =>
   request('/admin/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+
+export const changeAdminPassword = (currentPassword, newPassword) =>
+  adminRequest('/admin/me/password', { method: 'PATCH', body: JSON.stringify({ currentPassword, newPassword }) });
 
 async function adminRequest(path, options = {}) {
   const token = getAdminToken();
@@ -95,3 +101,10 @@ export const createProfessional = (payload) => adminRequest('/admin/professional
 export const updateProfessional = (id, payload) => adminRequest(`/admin/professionals/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
 
 export const getAdminStats = (date) => adminRequest(`/admin/stats${date ? `?date=${date}` : ''}`);
+
+export const getScheduleOverrides = (professionalId, from) =>
+  adminRequest(`/admin/professionals/${professionalId}/schedule-overrides${from ? `?from=${from}` : ''}`);
+export const saveScheduleOverride = (professionalId, date, payload) =>
+  adminRequest(`/admin/professionals/${professionalId}/schedule-overrides/${date}`, { method: 'PUT', body: JSON.stringify(payload) });
+export const deleteScheduleOverride = (professionalId, date) =>
+  adminRequest(`/admin/professionals/${professionalId}/schedule-overrides/${date}`, { method: 'DELETE' });
